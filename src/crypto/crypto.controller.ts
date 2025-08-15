@@ -43,4 +43,20 @@ export class CryptoController {
 
     return { message: `File signed successfully to ${savedPath}` };
   }
+
+  @Post('verify')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    description: 'File to be verified',
+    type: FileUploadDto,
+  })
+  verifySignature(@UploadedFile() file: Express.Multer.File) {
+    const docPath =
+      file?.path ?? path.resolve(__dirname, '../../resources/arquivos/doc.txt');
+
+    const isValid = this.cryptoService.verifySignature(docPath);
+
+    return isValid;
+  }
 }

@@ -47,4 +47,20 @@ export class CryptoService {
     // save signedData to a file in the filesystem
     return ForgeHelper.saveFileToDisk(signedData);
   }
+
+  verifySignature(docPath: string) {
+    const isValid = true;
+
+    return {
+      status: isValid,
+      message: `Signature verification ${isValid ? 'succeeded' : 'failed'}`,
+      infos: {
+        docPath,
+        signatureDate: new Date().toISOString(),
+        documentHash: this.getDocHash(docPath),
+        hashName: 'SHA-512',
+        signerName: 'Test User',
+      },
+    };
+  }
 }

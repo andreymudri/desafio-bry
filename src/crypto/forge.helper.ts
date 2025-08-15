@@ -191,6 +191,7 @@ export default class ForgeHelper {
 
     const asn1 = p7.toAsn1();
     const der = forge.asn1.toDer(asn1).getBytes();
+    console.log(der);
     return Buffer.from(der, 'binary');
   }
 
