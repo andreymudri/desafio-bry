@@ -13,8 +13,12 @@ export default class ForgeHelper {
     const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, false, pfxPassword);
 
     // Collect key and cert bags with metadata for robust matching
+    // Local mapped type alias used to express that the bag object
+    // also behaves like a string-indexed record (works around external lib types)
+    type BagMap = { key?: unknown; cert?: unknown } & Record<string, unknown>;
+
     type Bag = {
-      bag: { key?: unknown; cert?: unknown } & Record<string, unknown>;
+      bag: BagMap;
       friendlyName?: string;
       localKeyIdHex?: string;
       type?: string;
@@ -23,8 +27,8 @@ export default class ForgeHelper {
     const keyBags: Bag[] = [];
     const certBags: Bag[] = [];
 
-    p12.safeContents.forEach((safeContent: any) => {
-      safeContent.safeBags.forEach((safeBag: any) => {
+    p12.safeContents.forEach((safeContent) => {
+      safeContent.safeBags.forEach((safeBag) => {
         const attrs =
           (safeBag.attributes as {
             friendlyName?: string[];
@@ -32,13 +36,13 @@ export default class ForgeHelper {
           }) || {};
 
         // friendlyName may appear as an array with first element a JS string
-        const friendlyName = Array.isArray(attrs?.friendlyName)
-          ? String(attrs!.friendlyName![0])
+        const friendlyName = Array.isArray(attrs.friendlyName)
+          ? String(attrs.friendlyName[0])
           : undefined;
 
         // localKeyId may be binary; try guarded conversions to a byte string
         let localKeyIdHex: string | undefined;
-        const localKeyIdRaw = Array.isArray(attrs?.localKeyId)
+        const localKeyIdRaw = Array.isArray(attrs.localKeyId)
           ? attrs.localKeyId[0]
           : undefined;
         if (localKeyIdRaw) {
@@ -48,14 +52,19 @@ export default class ForgeHelper {
               bytes = localKeyIdRaw;
             } else if (Buffer.isBuffer(localKeyIdRaw)) {
               bytes = localKeyIdRaw.toString('binary');
-            } else if (typeof (localKeyIdRaw as any).getBytes === 'function') {
-              bytes = (localKeyIdRaw as any).getBytes();
-            } else if (typeof (localKeyIdRaw as any).value === 'string') {
-              bytes = (localKeyIdRaw as any).value as string;
+            } else if (
+              typeof (localKeyIdRaw as { getBytes?: unknown })?.getBytes ===
+              'function'
+            ) {
+              bytes = (localKeyIdRaw as { getBytes: () => string }).getBytes();
+            } else if (
+              typeof (localKeyIdRaw as { value?: unknown })?.value === 'string'
+            ) {
+              bytes = (localKeyIdRaw as { value: string }).value;
             }
 
             if (bytes) {
-              localKeyIdHex = forge.util.bytesToHex(bytes as string);
+              localKeyIdHex = forge.util.bytesToHex(bytes);
             }
           } catch {
             // ignore conversion errors and leave undefined
@@ -63,7 +72,10 @@ export default class ForgeHelper {
         }
 
         const entry: Bag = {
-          bag: safeBag,
+          // safeBag comes from the external forge types and doesn't include a
+          // string index signature; cast to BagMap locally so it is treated
+          // as a Record<string, unknown> where needed (non-invasive)
+          bag: safeBag as unknown as BagMap,
           friendlyName,
           localKeyIdHex,
           type: safeBag.type,
@@ -78,11 +90,9 @@ export default class ForgeHelper {
     });
 
     const extractKeyFrom = (entry?: Bag) =>
-      (entry && (entry.bag.key as unknown as forge.pki.PrivateKey)) ||
-      undefined;
+      (entry && (entry.bag.key as forge.pki.PrivateKey)) || undefined;
     const extractCertFrom = (entry?: Bag) =>
-      (entry && (entry.bag.cert as unknown as forge.pki.Certificate)) ||
-      undefined;
+      (entry && (entry.bag.cert as forge.pki.Certificate)) || undefined;
 
     // 1) Try to find by friendlyName matching alias
     let matchedKeyEntry = keyBags.find((k) => k.friendlyName === alias);
@@ -184,7 +194,7 @@ export default class ForgeHelper {
     return Buffer.from(der, 'binary');
   }
 
-  static saveFileToDisk(signedData: Buffer): string {
+  static saveFileToDisk(signedData: Buffer, index = 0): string {
     //verify if folder exists
     const dir = path.resolve(__dirname, '../../resources/assinados');
     if (!fs.existsSync(dir)) {
@@ -192,8 +202,12 @@ export default class ForgeHelper {
     }
     const outputPath = path.resolve(
       __dirname,
-      '../../resources/assinados/signed_file.p7s',
+      `../../resources/assinados/signed_file_${index}.p7s`,
     );
+
+    if (fs.existsSync(outputPath)) {
+      return this.saveFileToDisk(signedData, index + 1);
+    }
     fs.writeFileSync(outputPath, signedData);
     return outputPath;
   }
