@@ -42,6 +42,9 @@ export class CryptoService {
       pfxPassword,
     );
     const data = fs.readFileSync(docPath);
-    return ForgeHelper.signData(data, key, cert);
+
+    const signedData = ForgeHelper.signData(data, key, cert);
+    // save signedData to a file in the filesystem
+    return ForgeHelper.saveFileToDisk(signedData);
   }
 }

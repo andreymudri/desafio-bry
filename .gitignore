@@ -3,6 +3,9 @@
 /node_modules
 /build
 
+
+#signed files
+/resources/assinados
 # Logs
 logs
 *.log

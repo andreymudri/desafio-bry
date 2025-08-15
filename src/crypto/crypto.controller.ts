@@ -39,6 +39,8 @@ export class CryptoController {
     const docPath =
       file?.path ?? path.resolve(__dirname, '../../resources/arquivos/doc.txt');
 
-    return this.cryptoService.signFile(docPath);
+    const savedPath = this.cryptoService.signFile(docPath);
+
+    return { message: `File signed successfully to ${savedPath}` };
   }
 }
