@@ -64,11 +64,8 @@ describe('CryptoController', () => {
       .mockResolvedValue(svcResult as never);
 
     const resourcesRoot = path.resolve(__dirname, '../../resources');
-    const signedPath = path.join(
-      resourcesRoot,
-      'assinados',
-      'signed_file_0.p7s',
-    );
+    // Use an existing resource file to avoid requiring a pre-generated signed file
+    const signedPath = path.join(resourcesRoot, 'arquivos', 'doc.txt');
 
     const file = { path: signedPath } as unknown as Express.Multer.File;
 
