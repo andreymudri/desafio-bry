@@ -3,10 +3,16 @@ import {
   Post,
   UploadedFile,
   UseInterceptors,
+  UploadedFiles,
+  Body,
+  BadRequestException,
 } from '@nestjs/common';
 import { CryptoService } from './crypto.service';
 import * as path from 'path';
-import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  FileInterceptor,
+  FileFieldsInterceptor,
+} from '@nestjs/platform-express';
 import { ApiBody, ApiConsumes } from '@nestjs/swagger';
 import FileUploadDto from './dto/FileUploadDto';
 
@@ -14,34 +20,50 @@ import FileUploadDto from './dto/FileUploadDto';
 export class CryptoController {
   constructor(private readonly cryptoService: CryptoService) {}
 
-  @Post('file-hash')
-  @UseInterceptors(FileInterceptor('file'))
+  @Post('signature')
+  @UseInterceptors(
+    FileFieldsInterceptor([
+      { name: 'file', maxCount: 1 },
+      { name: 'pfx', maxCount: 1 },
+    ]),
+  )
   @ApiConsumes('multipart/form-data')
   @ApiBody({
-    description: 'File to be hashed',
-    type: FileUploadDto,
+    description: 'File to be signed, PKCS12 file and its password',
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        pfx: { type: 'string', format: 'binary' },
+        pfxPassword: { type: 'string' },
+      },
+      required: ['file', 'pfx', 'pfxPassword'],
+    },
   })
-  async getCryptoResume(@UploadedFile() file: Express.Multer.File) {
+  async signFileCMS(
+    @UploadedFiles()
+    files: { file?: Express.Multer.File[]; pfx?: Express.Multer.File[] },
+    @Body('pfxPassword') pfxPassword: string,
+  ) {
+    const file = files?.file?.[0];
+    const pfx = files?.pfx?.[0];
+
+    if (!file || !pfx || !pfxPassword) {
+      throw new BadRequestException('Missing required files or parameters');
+    }
+
     const docPath =
       file?.path ?? path.resolve(__dirname, '../../resources/arquivos/doc.txt');
+    const pfxPath = pfx.path;
 
-    return this.cryptoService.getDocHash(docPath);
-  }
+    const signatureBase64 = await this.cryptoService.signFileCMS(
+      docPath,
+      pfxPath,
+      pfxPassword,
+    );
 
-  @Post('sign-file')
-  @UseInterceptors(FileInterceptor('file'))
-  @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    description: 'File to be signed',
-    type: FileUploadDto,
-  })
-  signFile(@UploadedFile() file: Express.Multer.File) {
-    const docPath =
-      file?.path ?? path.resolve(__dirname, '../../resources/arquivos/doc.txt');
-
-    const savedPath = this.cryptoService.signFile(docPath);
-
-    return { message: `File signed successfully to ${savedPath}` };
+    // Return the Base64 CMS signature in the response body
+    return signatureBase64;
   }
 
   @Post('verify')
@@ -51,12 +73,12 @@ export class CryptoController {
     description: 'File to be verified',
     type: FileUploadDto,
   })
-  verifySignature(@UploadedFile() file: Express.Multer.File) {
+  async verifySignature(@UploadedFile() file: Express.Multer.File) {
     const docPath =
       file?.path ?? path.resolve(__dirname, '../../resources/arquivos/doc.txt');
 
-    const isValid = this.cryptoService.verifySignature(docPath);
+    const result = await this.cryptoService.verifySignature(docPath);
 
-    return isValid;
+    return result;
   }
 }

@@ -48,19 +48,38 @@ export class CryptoService {
     return ForgeHelper.saveFileToDisk(signedData);
   }
 
-  verifySignature(docPath: string) {
-    const isValid = true;
+  async signFileCMS(
+    docPath: string,
+    pfxPath: string,
+    pfxPassword: string,
+  ): Promise<string> {
+    // Load key and cert from provided PKCS#12. Alias is optional; pass empty string
+    const { key, cert } = ForgeHelper.loadCertificate(pfxPath, '', pfxPassword);
+
+    const data = await fs.promises.readFile(docPath);
+
+    const signedBase64 = ForgeHelper.signData(data, key, cert);
+
+    // Return the Base64 CMS signature string
+    return signedBase64;
+  }
+
+  async verifySignature(docPath: string) {
+    const data = await fs.promises.readFile(docPath);
+
+    const result = ForgeHelper.verifySignedData(data);
+
+    const status = result.valid ? 'VALIDO' : 'INVALIDO';
+
+    const infos: Partial<Record<string, string>> = {};
+    if (result.signerName) infos.signerName = result.signerName;
+    if (result.signingTime) infos.signingTime = result.signingTime;
+    if (result.documentHashHex) infos.documentHash = result.documentHashHex;
+    if (result.digestAlgorithmName) infos.hashName = result.digestAlgorithmName;
 
     return {
-      status: isValid,
-      message: `Signature verification ${isValid ? 'succeeded' : 'failed'}`,
-      infos: {
-        docPath,
-        signatureDate: new Date().toISOString(),
-        documentHash: this.getDocHash(docPath),
-        hashName: 'SHA-512',
-        signerName: 'Test User',
-      },
+      status,
+      infos: Object.keys(infos).length ? infos : undefined,
     };
   }
 }
