@@ -13,13 +13,15 @@ import {
 import { CryptoService } from './crypto.service';
 import * as path from 'path';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBody, ApiConsumes } from '@nestjs/swagger';
+import { ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import FileUploadDto from './dto/FileUploadDto';
 import SignRequestDto from './dto/SignRequestDto';
+import SignatureFormDto from './dto/SignatureFormDto';
 import type { MulterOptions } from '@nestjs/platform-express/multer/interfaces/multer-options.interface';
 import { MulterError } from 'multer';
 import { signatureFilesInterceptor } from './interceptors/signature-files.interceptor';
 
+@ApiTags('Crypto')
 @Controller()
 export class CryptoController {
   constructor(private readonly cryptoService: CryptoService) {}
@@ -31,15 +33,7 @@ export class CryptoController {
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     description: 'File to be signed, PKCS12 file and its password',
-    schema: {
-      type: 'object',
-      properties: {
-        file: { type: 'string', format: 'binary' },
-        pfx: { type: 'string', format: 'binary' },
-        pfxPassword: { type: 'string', minLength: 6 },
-      },
-      required: ['file', 'pfx', 'pfxPassword'],
-    },
+    type: SignatureFormDto,
   })
   async signFileCMS(
     @UploadedFiles()
