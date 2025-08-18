@@ -30,13 +30,55 @@ export class Pkcs12AliasNotFoundError extends Error {
 
 interface SignedDataVerificationResult {
   valid: boolean;
+  trusted?: boolean;
   signerName?: string;
   signingTime?: string;
   documentHashHex?: string;
   digestAlgorithmName?: string;
+  issuerName?: string;
+  serialNumberHex?: string;
+  notBefore?: string;
+  notAfter?: string;
 }
 
 export default class ForgeHelper {
+  private static tryParseCert(buffer: Buffer): forge.pki.Certificate | null {
+    try {
+      const text = buffer.toString('utf8');
+      if (/-----BEGIN CERTIFICATE-----/.test(text)) {
+        return forge.pki.certificateFromPem(text);
+      }
+    } catch {
+      // ignore and try DER
+    }
+    try {
+      const binary = buffer.toString('binary');
+      const asn1 = forge.asn1.fromDer(binary);
+      return forge.pki.certificateFromAsn1(asn1);
+    } catch {
+      return null;
+    }
+  }
+
+  private static async loadCaCertificatesFromResources(): Promise<
+    forge.pki.Certificate[]
+  > {
+    const dir = path.resolve(__dirname, '../../resources/cadeia');
+    const files = ['ac_bry_servidor_seguro_v3.cer', 'ac_raiz_bry_v3.cer'];
+    const certs: forge.pki.Certificate[] = [];
+    for (const f of files) {
+      try {
+        const p = path.resolve(dir, f);
+        const buf = await fs.promises.readFile(p);
+        const cert = this.tryParseCert(buf);
+        if (cert) certs.push(cert);
+      } catch {
+        // ignore missing/invalid CA files
+      }
+    }
+    return certs;
+  }
+
   static async loadCertificate(
     pfxPath: string,
     alias: string,
@@ -280,6 +322,9 @@ export default class ForgeHelper {
       const signer = p7.signers && p7.signers[0];
       const cert = p7.certificates && p7.certificates[0];
 
+      // Verificação de confiança usando cadeia em resources/cadeia
+      let trusted: boolean | undefined = undefined;
+
       // signerName a partir do CN do certificado
       let signerName: string | undefined;
       try {
@@ -307,6 +352,10 @@ export default class ForgeHelper {
       let signingTime: string | undefined;
       let documentHashHex: string | undefined;
       let digestAlgorithmName: string | undefined;
+      let issuerName: string | undefined;
+      let serialNumberHex: string | undefined;
+      let notBefore: string | undefined;
+      let notAfter: string | undefined;
 
       if (signer) {
         // OID do algoritmo de digest pode estar em signer.digestAlgorithm
@@ -359,12 +408,111 @@ export default class ForgeHelper {
         }
       }
 
+      // Mais informações do certificado
+      try {
+        if (cert) {
+          // Issuer CN
+          const ifieldAny: any =
+            (cert.issuer &&
+              cert.issuer.getField &&
+              cert.issuer.getField('CN')) ||
+            (Array.isArray(cert.issuer?.attributes) &&
+              cert.issuer.attributes.find(
+                (a: any) => a && a.name === 'commonName',
+              ));
+          const ival = ifieldAny && (ifieldAny.value ?? ifieldAny.commonName);
+          if (ival) issuerName = String(ival);
+
+          // Serial (hex)
+          if (cert.serialNumber)
+            serialNumberHex = String(cert.serialNumber).toUpperCase();
+
+          // Validade
+          if (cert.validity) {
+            const validityAny: any = cert.validity;
+            const nb = validityAny?.notBefore;
+            const na = validityAny?.notAfter;
+            if (nb) {
+              if (nb instanceof Date) {
+                notBefore = nb.toISOString();
+              } else if (typeof nb === 'string' || typeof nb === 'number') {
+                notBefore = new Date(nb).toISOString();
+              }
+            }
+            if (na) {
+              if (na instanceof Date) {
+                notAfter = na.toISOString();
+              } else if (typeof na === 'string' || typeof na === 'number') {
+                notAfter = new Date(na).toISOString();
+              }
+            }
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+
+      // Completa verificação de confiança (fora do bloco anterior por simplicidade)
+      if (trusted === undefined) {
+        try {
+          if (cert) {
+            // Carrega CAs
+            const caCertsSync: forge.pki.Certificate[] = [];
+            try {
+              const dir = path.resolve(__dirname, '../../resources/cadeia');
+              const files = [
+                'ac_bry_servidor_seguro_v3.cer',
+                'ac_raiz_bry_v3.cer',
+              ];
+              for (const f of files) {
+                try {
+                  const p = path.resolve(dir, f);
+                  const buf = fs.readFileSync(p);
+                  const parsed = ForgeHelper.tryParseCert(buf);
+                  if (parsed) caCertsSync.push(parsed);
+                } catch {
+                  /* ignore */
+                }
+              }
+            } catch {
+              /* ignore */
+            }
+
+            if (caCertsSync.length) {
+              const caStore = forge.pki.createCaStore(caCertsSync);
+              // Monta cadeia começando pelo certificado do signatário e demais da mensagem (se houver)
+              const chain: forge.pki.Certificate[] = [cert];
+              if (Array.isArray(p7.certificates)) {
+                for (const c of p7.certificates as forge.pki.Certificate[]) {
+                  if (c !== cert) chain.push(c);
+                }
+              }
+              try {
+                forge.pki.verifyCertificateChain(caStore, chain);
+                trusted = true;
+              } catch {
+                trusted = false;
+              }
+            } else {
+              trusted = false;
+            }
+          }
+        } catch {
+          trusted = false;
+        }
+      }
+
       return {
         valid,
+        trusted,
         signerName,
         signingTime,
         documentHashHex,
         digestAlgorithmName,
+        issuerName,
+        serialNumberHex,
+        notBefore,
+        notAfter,
       };
     } catch {
       return { valid: false };

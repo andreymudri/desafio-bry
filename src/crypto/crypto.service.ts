@@ -107,6 +107,11 @@ export class CryptoService {
         infos.documentHash = String(result.documentHashHex);
       if (result.digestAlgorithmName)
         infos.hashName = String(result.digestAlgorithmName);
+      if (result.issuerName) infos.issuer = String(result.issuerName);
+      if (result.serialNumberHex)
+        infos.serialNumber = String(result.serialNumberHex);
+      if (typeof result.trusted === 'boolean')
+        infos.trustedChain = result.trusted ? 'true' : 'false';
 
       return {
         status,
