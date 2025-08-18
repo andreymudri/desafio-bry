@@ -11,6 +11,7 @@ import * as fs from 'fs';
 describe('CryptoController (e2e)', () => {
   let app: INestApplication<App>;
   const tmpDir = os.tmpdir();
+  let signedTmpFile: string;
 
   // Resource paths
   const docPath = path.resolve(__dirname, '../resources/arquivos/doc.txt');
@@ -28,9 +29,30 @@ describe('CryptoController (e2e)', () => {
 
     app = moduleFixture.createNestApplication();
     await app.init();
+
+    // Pre-generate a valid CMS signature and store it as a temp file for verification tests
+    const sigRes = await request(app.getHttpServer())
+      .post('/signature')
+      .attach('file', docPath)
+      .attach('pfx', pfxPath)
+      .field('pfxPassword', pfxPassword)
+      .expect(200)
+      .expect('Content-Type', /application\/json/);
+
+    const sigBody = sigRes.body as unknown as { signature: string };
+    const sigBuf = Buffer.from(sigBody.signature, 'base64');
+    signedTmpFile = path.join(tmpDir, `signed_${Date.now()}.p7s`);
+    fs.writeFileSync(signedTmpFile, sigBuf);
   });
 
   afterAll(async () => {
+    try {
+      if (signedTmpFile && fs.existsSync(signedTmpFile)) {
+        fs.unlinkSync(signedTmpFile);
+      }
+    } catch {
+      // ignore cleanup errors
+    }
     await app.close();
   });
 
@@ -52,17 +74,12 @@ describe('CryptoController (e2e)', () => {
     // No further assertion here; verification is covered in another test.
   });
 
-  it('POST /verify should return VALIDO for a known signed file', async () => {
-    const signedFile = path.resolve(
-      __dirname,
-      '../resources/assinados/signed_file_0.p7s',
-    );
-
-    expect(fs.existsSync(signedFile)).toBe(true);
+  it('POST /verify should return VALIDO for a generated signed file', async () => {
+    expect(fs.existsSync(signedTmpFile)).toBe(true);
 
     const verifyRes = await request(app.getHttpServer())
       .post('/verify')
-      .attach('file', signedFile)
+      .attach('file', signedTmpFile)
       .expect(200)
       .expect('Content-Type', /application\/json/);
 
