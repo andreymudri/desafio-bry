@@ -57,18 +57,13 @@ export class CryptoController {
       file?.path ?? path.resolve(__dirname, '../../resources/arquivos/doc.txt');
     const pfxPath = pfx.path;
 
-    try {
-      const signatureBase64 = await this.cryptoService.signFileCMS(
-        docPath,
-        pfxPath,
-        body.pfxPassword,
-      );
-      // Return a consistent JSON object
-      return { signature: signatureBase64 };
-    } catch {
-      // Sanitize and avoid leaking forge/alias/internal messages
-      throw new BadRequestException('Unable to generate signature');
-    }
+    const signatureBase64 = await this.cryptoService.signFileCMS(
+      docPath,
+      pfxPath,
+      body.pfxPassword,
+    );
+    // Return a consistent JSON object
+    return { signature: signatureBase64 };
   }
 
   @Post('verify')

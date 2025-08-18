@@ -6,6 +6,28 @@ import * as forge from 'node-forge';
 import * as fs from 'fs';
 import * as path from 'path';
 
+// Erros de domínio para classificar falhas de PKCS#12/forge
+export class Pkcs12InvalidPasswordError extends Error {
+  constructor(message = 'INVALID_PFX_PASSWORD') {
+    super(message);
+    this.name = 'Pkcs12InvalidPasswordError';
+  }
+}
+
+export class Pkcs12CorruptedError extends Error {
+  constructor(message = 'PFX_CORRUPTED') {
+    super(message);
+    this.name = 'Pkcs12CorruptedError';
+  }
+}
+
+export class Pkcs12AliasNotFoundError extends Error {
+  constructor(message = 'ALIAS_NOT_FOUND') {
+    super(message);
+    this.name = 'Pkcs12AliasNotFoundError';
+  }
+}
+
 interface SignedDataVerificationResult {
   valid: boolean;
   signerName?: string;
@@ -15,18 +37,47 @@ interface SignedDataVerificationResult {
 }
 
 export default class ForgeHelper {
-  static loadCertificate(
+  static async loadCertificate(
     pfxPath: string,
     alias: string,
     pfxPassword: string,
-  ): { key: forge.pki.PrivateKey; cert: forge.pki.Certificate } {
-    const pfxBuffer = fs.readFileSync(pfxPath);
-    const p12Asn1 = forge.asn1.fromDer(pfxBuffer.toString('binary'));
-    const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, false, pfxPassword);
+  ): Promise<{ key: forge.pki.PrivateKey; cert: forge.pki.Certificate }> {
+    let pfxBuffer: Buffer;
+    try {
+      pfxBuffer = await fs.promises.readFile(pfxPath);
+    } catch {
+      // Trata arquivo ilegível como corrompido/entrada inválida
+      throw new Pkcs12CorruptedError('PFX file not readable');
+    }
 
-    // Collect key and cert bags with metadata for robust matching
-    // Local mapped type alias used to express that the bag object
-    // also behaves like a string-indexed record (works around external lib types)
+    let p12Asn1: forge.asn1.Asn1;
+    try {
+      p12Asn1 = forge.asn1.fromDer(pfxBuffer.toString('binary'));
+    } catch {
+      // Falha ao interpretar DER
+      throw new Pkcs12CorruptedError('Invalid DER structure');
+    }
+
+    let p12: forge.pkcs12.Pkcs12Pfx;
+    try {
+      p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, false, pfxPassword);
+    } catch (err: any) {
+      const msg = String(err?.message || err || '').toLowerCase();
+      // Mensagens típicas do node-forge em caso de senha/MAC inválidos
+      if (
+        msg.includes('mac') ||
+        msg.includes('invalid password') ||
+        msg.includes('pbe') ||
+        msg.includes('decrypt')
+      ) {
+        throw new Pkcs12InvalidPasswordError();
+      }
+      throw new Pkcs12CorruptedError('Unable to parse PKCS#12');
+    }
+
+    // Coleta bolsas de chave e certificado com metadados para casamento robusto
+    // Alias de tipo mapeado local para expressar que o objeto "bag"
+    // também se comporta como um Record indexado por string (contorna tipos da lib externa)
     type BagMap = { key?: unknown; cert?: unknown } & Record<string, unknown>;
 
     type Bag = {
@@ -47,12 +98,12 @@ export default class ForgeHelper {
             localKeyId?: unknown[];
           }) || {};
 
-        // friendlyName may appear as an array with first element a JS string
+        // friendlyName pode aparecer como array com primeiro elemento string
         const friendlyName = Array.isArray(attrs.friendlyName)
           ? String(attrs.friendlyName[0])
           : undefined;
 
-        // localKeyId may be binary; try guarded conversions to a byte string
+        // localKeyId pode ser binário; tenta conversões protegidas para bytes
         let localKeyIdHex: string | undefined;
         const localKeyIdRaw = Array.isArray(attrs.localKeyId)
           ? attrs.localKeyId[0]
@@ -79,14 +130,14 @@ export default class ForgeHelper {
               localKeyIdHex = forge.util.bytesToHex(bytes);
             }
           } catch {
-            // ignore conversion errors and leave undefined
+            // ignora erros de conversão e mantém undefined
           }
         }
 
         const entry: Bag = {
-          // safeBag comes from the external forge types and doesn't include a
-          // string index signature; cast to BagMap locally so it is treated
-          // as a Record<string, unknown> where needed (non-invasive)
+          // safeBag vem de tipos externos do forge e não inclui assinatura de índice string;
+          // faz cast para BagMap localmente para que seja tratado como Record<string, unknown>
+          // onde necessário (abordagem não invasiva)
           bag: safeBag as unknown as BagMap,
           friendlyName,
           localKeyIdHex,
@@ -106,11 +157,11 @@ export default class ForgeHelper {
     const extractCertFrom = (entry?: Bag) =>
       (entry && (entry.bag.cert as forge.pki.Certificate)) || undefined;
 
-    // 1) Try to find by friendlyName matching alias
+    // 1) Tenta encontrar por friendlyName combinando com o alias
     let matchedKeyEntry = keyBags.find((k) => k.friendlyName === alias);
     let matchedCertEntry = certBags.find((c) => c.friendlyName === alias);
 
-    // 2) If not found, try matching by localKeyId (hex)
+    // 2) Se não encontrar, tenta encontrar por localKeyId (hex)
     if (!matchedKeyEntry || !matchedCertEntry) {
       for (const k of keyBags) {
         if (!k.localKeyIdHex) continue;
@@ -125,7 +176,7 @@ export default class ForgeHelper {
       }
     }
 
-    // 3) If still not found, but there's exactly one key and one cert, use them (convenience)
+    // 3) Ainda não encontrou? Se houver exatamente uma chave e um certificado, será utilizado esta chave e cert por conveniência
     if (
       (!matchedKeyEntry || !matchedCertEntry) &&
       keyBags.length === 1 &&
@@ -135,12 +186,12 @@ export default class ForgeHelper {
       matchedCertEntry = matchedCertEntry || certBags[0];
     }
 
-    // 4) Finalize
+    // 4) Finaliza
     const privateKey = extractKeyFrom(matchedKeyEntry);
     const certificate = extractCertFrom(matchedCertEntry);
 
     if (!privateKey || !certificate) {
-      // Build helpful diagnostics listing available friendly names
+      // Constrói diagnóstico listando friendlyNames disponíveis
       const availableFriendly = Array.from(
         new Set([
           ...keyBags.map((k) => k.friendlyName).filter(Boolean),
@@ -165,7 +216,7 @@ export default class ForgeHelper {
         ? ` (available: ${availMsgParts.join('; ')})`
         : '';
 
-      throw new Error(
+      throw new Pkcs12AliasNotFoundError(
         `Failed to find key and certificate for alias: ${alias}${availMsg}`,
       );
     }
@@ -203,7 +254,7 @@ export default class ForgeHelper {
 
     const asn1 = p7.toAsn1();
     const der = forge.asn1.toDer(asn1).getBytes();
-    // Return Base64 string for interoperability
+    // Retorna string Base64 para interoperabilidade
     const buf = Buffer.from(der, 'binary');
     return buf.toString('base64');
   }
@@ -212,10 +263,10 @@ export default class ForgeHelper {
     try {
       const binary = signedBuffer.toString('binary');
       const asn1 = forge.asn1.fromDer(binary);
-      // forge types are imprecise here; cast to any for runtime access
+      // Tipos do forge são imprecisos. usa any no acesso
       const p7: any = forge.pkcs7.messageFromAsn1(asn1);
 
-      // Try to verify signatures (will return boolean)
+      // Tenta verificar as assinaturas (retorna um booleano)
       let valid = false;
       try {
         if (typeof p7.verify === 'function') {
@@ -225,20 +276,20 @@ export default class ForgeHelper {
         return { valid: false };
       }
 
-      // Extract first signer and certificate if present
+      // Extrai o primeiro signatário e certificado, se presentes
       const signer = p7.signers && p7.signers[0];
       const cert = p7.certificates && p7.certificates[0];
 
-      // signerName from certificate CN
+      // signerName a partir do CN do certificado
       let signerName: string | undefined;
       try {
         if (cert && cert.subject) {
-          // cert.subject.getField may exist in forge cert
+          // cert.subject.getField pode existir no certificado do forge
           const field =
             (cert.subject &&
               cert.subject.getField &&
               cert.subject.getField('CN')) ||
-            // or subject.attributes array
+            // ou no array subject.attributes
             (Array.isArray(cert.subject?.attributes) &&
               cert.subject.attributes.find(
                 (a: any) => a && a.name === 'commonName',
@@ -252,17 +303,17 @@ export default class ForgeHelper {
         signerName = undefined;
       }
 
-      // signingTime and messageDigest from authenticatedAttributes
+      // signingTime e messageDigest a partir de authenticatedAttributes
       let signingTime: string | undefined;
       let documentHashHex: string | undefined;
       let digestAlgorithmName: string | undefined;
 
       if (signer) {
-        // digest algorithm OID may be on signer.digestAlgorithm
+        // OID do algoritmo de digest pode estar em signer.digestAlgorithm
         try {
           const oid = signer.digestAlgorithm || signer.digestAlgorithmOid;
           if (oid) {
-            // map common OIDs
+            // mapeia OIDs comuns
             const map: Record<string, string> = {
               [forge.pki.oids.sha1]: 'SHA-1',
               [forge.pki.oids.sha256]: 'SHA-256',
@@ -295,13 +346,15 @@ export default class ForgeHelper {
               if (typeof mv === 'string') {
                 documentHashHex = forge.util.bytesToHex(mv);
               } else if (mv && typeof mv === 'object' && mv.getBytes) {
-                documentHashHex = forge.util.bytesToHex(mv.getBytes());
+                documentHashHex = forge.util.bytesToHex(
+                  (mv as { getBytes: () => string }).getBytes(),
+                );
               } else if (Buffer.isBuffer(mv)) {
                 documentHashHex = Buffer.from(mv).toString('hex');
               }
             }
           } catch {
-            // ignore attribute parsing errors
+            // ignora erros na interpretação de atributos
           }
         }
       }
@@ -318,26 +371,36 @@ export default class ForgeHelper {
     }
   }
 
-  static saveFileToDisk(signedData: Buffer | string, index = 0): string {
-    //verify if folder exists
+  static async saveFileToDisk(
+    signedData: Buffer | string,
+    index = 0,
+  ): Promise<string> {
     const dir = path.resolve(__dirname, '../../resources/assinados');
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    const outputPath = path.resolve(
-      __dirname,
-      `../../resources/assinados/signed_file_${index}.p7s`,
-    );
+    await fs.promises.mkdir(dir, { recursive: true });
 
-    if (fs.existsSync(outputPath)) {
-      return this.saveFileToDisk(signedData, index + 1);
+    // Encontra o próximo nome de arquivo disponível sem recursão
+    let outputPath: string;
+    let i = index;
+    while (true) {
+      outputPath = path.resolve(
+        __dirname,
+        `../../resources/assinados/signed_file_${i}.p7s`,
+      );
+      try {
+        await fs.promises.access(outputPath, fs.constants.F_OK);
+        // existe, tenta o próximo
+        i += 1;
+      } catch {
+        // não existe, podemos usar
+        break;
+      }
     }
-    // If signedData is Base64 string, decode to binary before writing
-    if (typeof signedData === 'string') {
-      fs.writeFileSync(outputPath, Buffer.from(signedData, 'base64'));
-    } else {
-      fs.writeFileSync(outputPath, signedData);
-    }
+
+    const bytes =
+      typeof signedData === 'string'
+        ? Buffer.from(signedData, 'base64')
+        : signedData;
+    await fs.promises.writeFile(outputPath, bytes);
     return outputPath;
   }
 }

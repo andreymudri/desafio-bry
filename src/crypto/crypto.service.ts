@@ -1,8 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import * as fs from 'fs';
 import { createHash } from 'crypto';
 import * as path from 'path';
-import ForgeHelper from './forge.helper';
+import ForgeHelper, {
+  Pkcs12AliasNotFoundError,
+  Pkcs12CorruptedError,
+  Pkcs12InvalidPasswordError,
+} from './forge.helper';
 
 @Injectable()
 export class CryptoService {
@@ -26,25 +34,25 @@ export class CryptoService {
     });
   }
 
-  signFile(docPath: string) {
+  async signFile(docPath: string) {
     // Caminho para o PKCS#12 fornecido no repositório
     const pfxPath = path.resolve(
       __dirname,
       '../../resources/pkcs12/certificado_teste_hub.pfx',
     );
-    // Valores informados no enunciado
+    // Valores informados no desafio
     const alias = 'e2618a8b-20de-4dd2-b209-70912e3177f4';
     const pfxPassword = 'bry123456';
 
-    const { key, cert } = ForgeHelper.loadCertificate(
+    const { key, cert } = await ForgeHelper.loadCertificate(
       pfxPath,
       alias,
       pfxPassword,
     );
-    const data = fs.readFileSync(docPath);
+    const data = await fs.promises.readFile(docPath);
 
     const signedData = ForgeHelper.signData(data, key, cert);
-    // save signedData to a file in the filesystem
+    // Salva o conteúdo assinado em um arquivo no sistema de arquivos
     return ForgeHelper.saveFileToDisk(signedData);
   }
 
@@ -54,8 +62,8 @@ export class CryptoService {
     pfxPassword: string,
   ): Promise<string> {
     try {
-      // Load key and cert from provided PKCS#12. Alias is optional; pass empty string
-      const { key, cert } = ForgeHelper.loadCertificate(
+      // Carrega chave e certificado do PKCS#12 fornecido. Alias é opcional; passe string vazia
+      const { key, cert } = await ForgeHelper.loadCertificate(
         pfxPath,
         '',
         pfxPassword,
@@ -65,13 +73,22 @@ export class CryptoService {
 
       const signedBase64 = ForgeHelper.signData(data, key, cert);
 
-      // Basic sanitization: ensure it's base64 by attempting decode and re-encode
+      // Saneamento básico: garante que é Base64 tentando decodificar e recodificar
       const buf = Buffer.from(signedBase64, 'base64');
       if (!buf.length) throw new Error('SIGNATURE_GENERATION_FAILED');
       return buf.toString('base64');
-    } catch {
-      // Avoid leaking internal forge messages
-      throw new Error('Could not generate signature');
+    } catch (err) {
+      if (err instanceof Pkcs12InvalidPasswordError) {
+        throw new BadRequestException('Senha do PFX inválida');
+      }
+      if (err instanceof Pkcs12CorruptedError) {
+        throw new UnprocessableEntityException('PFX corrompido ou inválido');
+      }
+      if (err instanceof Pkcs12AliasNotFoundError) {
+        throw new UnprocessableEntityException('Alias inexistente no PFX');
+      }
+      // Evita vazar mensagens internas do forge
+      throw new UnprocessableEntityException('Falha ao gerar assinatura');
     }
   }
 
@@ -96,7 +113,7 @@ export class CryptoService {
         infos: Object.keys(infos).length ? infos : undefined,
       };
     } catch {
-      // On read/verify failure, return a sanitized invalid response
+      // Em falha de leitura/verificação, retorna uma resposta inválida sanitizada
       return { status: 'INVALIDO' };
     }
   }
