@@ -45,16 +45,23 @@ describe('CryptoController', () => {
       pfx: [{ path: pfxPath } as unknown as Express.Multer.File],
     };
 
-    const result = await controller.signFileCMS(files, 'pfx-pass');
+    const result = await controller.signFileCMS(files, {
+      pfxPassword: 'pfx-pass',
+    });
 
     expect(result).toBe(signature);
     expect(signFileSpy).toHaveBeenCalledWith(docPath, pfxPath, 'pfx-pass');
   });
 
   it('signFileCMS throws BadRequestException when missing params', async () => {
-    await expect(controller.signFileCMS({}, '')).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
+    await expect(
+      controller.signFileCMS(
+        {},
+        {
+          pfxPassword: '',
+        },
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('verifySignature forwards file path to service and returns result', async () => {
