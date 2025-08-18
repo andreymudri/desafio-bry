@@ -6,6 +6,9 @@ import {
   UploadedFiles,
   Body,
   BadRequestException,
+  HttpCode,
+  HttpStatus,
+  Header,
 } from '@nestjs/common';
 import { CryptoService } from './crypto.service';
 import * as path from 'path';
@@ -22,6 +25,8 @@ export class CryptoController {
   constructor(private readonly cryptoService: CryptoService) {}
 
   @Post('signature')
+  @HttpCode(HttpStatus.OK)
+  @Header('Content-Type', 'application/json; charset=utf-8')
   @UseInterceptors(signatureFilesInterceptor())
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -52,17 +57,23 @@ export class CryptoController {
       file?.path ?? path.resolve(__dirname, '../../resources/arquivos/doc.txt');
     const pfxPath = pfx.path;
 
-    const signatureBase64 = await this.cryptoService.signFileCMS(
-      docPath,
-      pfxPath,
-      body.pfxPassword,
-    );
-
-    // Return the Base64 CMS signature in the response body
-    return signatureBase64;
+    try {
+      const signatureBase64 = await this.cryptoService.signFileCMS(
+        docPath,
+        pfxPath,
+        body.pfxPassword,
+      );
+      // Return a consistent JSON object
+      return { signature: signatureBase64 };
+    } catch {
+      // Sanitize and avoid leaking forge/alias/internal messages
+      throw new BadRequestException('Unable to generate signature');
+    }
   }
 
   @Post('verify')
+  @HttpCode(HttpStatus.OK)
+  @Header('Content-Type', 'application/json; charset=utf-8')
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 5, parts: 6 },

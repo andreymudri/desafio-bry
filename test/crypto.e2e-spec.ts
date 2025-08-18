@@ -34,26 +34,19 @@ describe('CryptoController (e2e)', () => {
     await app.close();
   });
 
-  it('POST /signature should return a Base64 CMS signature', async () => {
+  it('POST /signature should return a Base64 CMS signature in JSON', async () => {
     const res = await request(app.getHttpServer())
       .post('/signature')
       .attach('file', docPath)
       .attach('pfx', pfxPath)
       .field('pfxPassword', pfxPassword)
-      .expect(201);
+      .expect(200)
+      .expect('Content-Type', /application\/json/);
 
-    const rawText = typeof res.text === 'string' ? res.text : '';
-    let signatureB64: string;
-    try {
-      const parsed: unknown = JSON.parse(rawText);
-      signatureB64 = typeof parsed === 'string' ? parsed : rawText;
-    } catch {
-      signatureB64 = rawText;
-    }
-
-    expect(typeof signatureB64).toBe('string');
+    const body = res.body as unknown as { signature: string };
+    expect(typeof body.signature).toBe('string');
     // basic base64 check: decodes without throwing and not empty
-    const buf = Buffer.from(signatureB64, 'base64');
+    const buf = Buffer.from(body.signature, 'base64');
     expect(buf.length).toBeGreaterThan(0);
 
     // No further assertion here; verification is covered in another test.
@@ -70,7 +63,8 @@ describe('CryptoController (e2e)', () => {
     const verifyRes = await request(app.getHttpServer())
       .post('/verify')
       .attach('file', signedFile)
-      .expect(201);
+      .expect(200)
+      .expect('Content-Type', /application\/json/);
 
     const verifyBody = verifyRes.body as unknown as {
       status: string;
@@ -87,7 +81,8 @@ describe('CryptoController (e2e)', () => {
     const res = await request(app.getHttpServer())
       .post('/verify')
       .attach('file', docPath)
-      .expect(201);
+      .expect(200)
+      .expect('Content-Type', /application\/json/);
 
     const body = res.body as unknown as { status: string };
     expect(body).toHaveProperty('status', 'INVALIDO');

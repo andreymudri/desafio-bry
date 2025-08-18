@@ -53,33 +53,51 @@ export class CryptoService {
     pfxPath: string,
     pfxPassword: string,
   ): Promise<string> {
-    // Load key and cert from provided PKCS#12. Alias is optional; pass empty string
-    const { key, cert } = ForgeHelper.loadCertificate(pfxPath, '', pfxPassword);
+    try {
+      // Load key and cert from provided PKCS#12. Alias is optional; pass empty string
+      const { key, cert } = ForgeHelper.loadCertificate(
+        pfxPath,
+        '',
+        pfxPassword,
+      );
 
-    const data = await fs.promises.readFile(docPath);
+      const data = await fs.promises.readFile(docPath);
 
-    const signedBase64 = ForgeHelper.signData(data, key, cert);
+      const signedBase64 = ForgeHelper.signData(data, key, cert);
 
-    // Return the Base64 CMS signature string
-    return signedBase64;
+      // Basic sanitization: ensure it's base64 by attempting decode and re-encode
+      const buf = Buffer.from(signedBase64, 'base64');
+      if (!buf.length) throw new Error('SIGNATURE_GENERATION_FAILED');
+      return buf.toString('base64');
+    } catch {
+      // Avoid leaking internal forge messages
+      throw new Error('Could not generate signature');
+    }
   }
 
   async verifySignature(docPath: string) {
-    const data = await fs.promises.readFile(docPath);
+    try {
+      const data = await fs.promises.readFile(docPath);
 
-    const result = ForgeHelper.verifySignedData(data);
+      const result = ForgeHelper.verifySignedData(data);
 
-    const status = result.valid ? 'VALIDO' : 'INVALIDO';
+      const status = result.valid ? 'VALIDO' : 'INVALIDO';
 
-    const infos: Partial<Record<string, string>> = {};
-    if (result.signerName) infos.signerName = result.signerName;
-    if (result.signingTime) infos.signingTime = result.signingTime;
-    if (result.documentHashHex) infos.documentHash = result.documentHashHex;
-    if (result.digestAlgorithmName) infos.hashName = result.digestAlgorithmName;
+      const infos: Partial<Record<string, string>> = {};
+      if (result.signerName) infos.signerName = String(result.signerName);
+      if (result.signingTime) infos.signingTime = String(result.signingTime);
+      if (result.documentHashHex)
+        infos.documentHash = String(result.documentHashHex);
+      if (result.digestAlgorithmName)
+        infos.hashName = String(result.digestAlgorithmName);
 
-    return {
-      status,
-      infos: Object.keys(infos).length ? infos : undefined,
-    };
+      return {
+        status,
+        infos: Object.keys(infos).length ? infos : undefined,
+      };
+    } catch {
+      // On read/verify failure, return a sanitized invalid response
+      return { status: 'INVALIDO' };
+    }
   }
 }

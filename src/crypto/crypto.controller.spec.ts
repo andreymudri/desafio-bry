@@ -49,7 +49,7 @@ describe('CryptoController', () => {
       pfxPassword: 'pfx-pass',
     });
 
-    expect(result).toBe(signature);
+    expect(result).toEqual({ signature });
     expect(signFileSpy).toHaveBeenCalledWith(docPath, pfxPath, 'pfx-pass');
   });
 
