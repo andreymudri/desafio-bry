@@ -7,14 +7,14 @@ export default class SignatureFormDto {
     format: 'binary',
     description: 'Arquivo a ser assinado',
   })
-  file!: any;
+  file!: Express.Multer.File;
 
   @ApiProperty({
     type: 'string',
     format: 'binary',
     description: 'Arquivo PKCS#12 (PFX/P12) com a chave privada',
   })
-  pfx!: any;
+  pfx!: Express.Multer.File;
 
   @ApiProperty({
     description: 'Senha do arquivo PKCS#12 (PFX/P12)',
