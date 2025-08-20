@@ -56,7 +56,7 @@ export class CryptoController {
       pfxPath,
       body.pfxPassword,
     );
-    // Return a consistent JSON object
+
     return { signature: signatureBase64 };
   }
 
